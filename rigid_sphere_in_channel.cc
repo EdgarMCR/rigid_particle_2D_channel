@@ -76,6 +76,16 @@ using namespace oomph;
   /// Pseudo-solid (mesh) Poisson ratio
   double Nu=0.3;
 
+  /// Channel length
+  double ChannelLength = 16.0;
+
+  /// Channel width
+  double ChannelWidth = 4.0; 
+
+   /// Start position of the particle
+   double particle_start_x = -ChannelLength/2.0 + ChannelWidth;
+   double particle_start_y = 0.0;
+
   /// \short Pseudo-solid (mesh) "density" 
   /// Set to zero because we don't want inertia in the node update!
   double Lambda_sq=0.0;
@@ -340,8 +350,8 @@ UnstructuredImmersedEllipseProblem()
  Vector<TriangleMeshCurveSection*> boundary_segment_pt(4);
 
  //Set the length of the channel
- double half_length = 5.0;
- double half_height = 2.5;
+ double half_length = Problem_Parameter::ChannelLength/2.0;
+ double half_height = Problem_Parameter::ChannelWidth/2.0;
  
  // Initialize boundary segment
  Vector<Vector<double> > bound_seg(2);
@@ -407,8 +417,8 @@ UnstructuredImmersedEllipseProblem()
 
  // Build Rigid Body
  //-----------------
- double x_center = 0.0;
- double y_center = 0.0;
+ double x_center = Problem_Parameter::particle_start_x;
+ double y_center = Problem_Parameter::particle_start_y;
  double A = Problem_Parameter::A;
  double B = Problem_Parameter::B;
  GeomObject* temp_hole_pt = new GeneralEllipse(x_center,y_center,A,B);
@@ -437,8 +447,8 @@ UnstructuredImmersedEllipseProblem()
   
  // Combine to form a hole in the fluid mesh
  Vector<double> hole_coords(2);
- hole_coords[0]=0.0;
- hole_coords[1]=0.0;
+ hole_coords[0]= x_center;
+ hole_coords[1]= y_center;
  Vector<TriangleMeshClosedCurve*> curvilinear_hole_pt(1);
  hole_pt[0]=
   new TriangleMeshClosedCurve(
@@ -1176,14 +1186,14 @@ void UnstructuredImmersedEllipseProblem<ELEMENT>::doc_solution(
  dynamic_cast<ImmersedRigidBodyElement*>(this->Rigid_body_pt[0])->
   output_centre_of_gravity(this->Cog_file);
 
- //Output the exact solution
- this->output_exact_solution(this->Cog_exact_file);
+ //Output the exact solution for Jeffrey Orbit
+ // this->output_exact_solution(this->Cog_exact_file);
 
 }
 
 
 //=====================================================================  
-/// Output the exact solution
+/// Output the exact solution for JEffrey Orbit
 //=====================================================================  
 template<class ELEMENT>
 void UnstructuredImmersedEllipseProblem<ELEMENT>::
@@ -1228,7 +1238,7 @@ int main(int argc, char **argv)
  problem.solve_for_consistent_nodal_positions();
  
  // Initialise timestepper
- double dt=0.005;
+ double dt=0.001;
  problem.initialise_dt(dt);
 
  // Perform impulsive start
@@ -1257,18 +1267,19 @@ int main(int argc, char **argv)
  for (unsigned j=0;j<ncycle;j++)
   {       
 
-    std::cout << "\n\n=========================\n" << j << " cylce out of a total of " << ncycle << std::endl;
+    std::cout << "\n\n=========================\n" << j+1 << " cylce out of a total of " << ncycle << std::endl;
    // Adapt the problem
    problem.adapt();
 
    //Solve problem a few times
    for (unsigned i=0;i<nstep;i++)
     {     
-    std::cout << i << " step out of a total of " << nstep << std::endl;
+    std::cout << i+1 << " step out of a total of " << nstep << std::endl;
      // Solve the problem
      problem.unsteady_newton_solve(dt);
      problem.doc_solution();
     }
   }
+ std::cout << "\n\n Program finished.\n ======================================= \n" << std::endl;
 
 } //end of main
