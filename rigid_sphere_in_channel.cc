@@ -83,7 +83,7 @@ using namespace oomph;
   double ChannelWidth = 4.0; 
 
    /// Start position of the particle
-   double particle_start_x = -ChannelLength/2.0 + ChannelWidth;
+   double particle_start_x = ChannelWidth;
    double particle_start_y = 0.0;
 
   /// \short Pseudo-solid (mesh) "density" 
@@ -358,9 +358,13 @@ UnstructuredImmersedEllipseProblem()
  for(unsigned i=0;i<2;i++) {bound_seg[i].resize(2);}
 
  // First boundary segment
- bound_seg[0][0]=-half_length;
+ /*bound_seg[0][0]=-half_length;
  bound_seg[0][1]=-half_height;
  bound_seg[1][0]=-half_length;
+ bound_seg[1][1]=half_height;*/
+ bound_seg[0][0]=0.0;
+ bound_seg[0][1]=-half_height;
+ bound_seg[1][0]=0.0;
  bound_seg[1][1]=half_height;
  
  // Specify 1st boundary id
@@ -370,9 +374,9 @@ UnstructuredImmersedEllipseProblem()
  boundary_segment_pt[0] = new TriangleMeshPolyLine(bound_seg,bound_id);
  
  // Second boundary segment
- bound_seg[0][0]=-half_length;
+ bound_seg[0][0]=0.0;
  bound_seg[0][1]=half_height;
- bound_seg[1][0]=half_length;
+ bound_seg[1][0]=2.0*half_length;
  bound_seg[1][1]=half_height;
 
  // Specify 2nd boundary id
@@ -382,9 +386,9 @@ UnstructuredImmersedEllipseProblem()
  boundary_segment_pt[1] = new TriangleMeshPolyLine(bound_seg,bound_id);
 
  // Third boundary segment
- bound_seg[0][0]=half_length;
+ bound_seg[0][0]=2.0*half_length;
  bound_seg[0][1]=half_height;
- bound_seg[1][0]=half_length;
+ bound_seg[1][0]=2.0*half_length;
  bound_seg[1][1]=-half_height;
 
  // Specify 3rd boundary id
@@ -394,9 +398,9 @@ UnstructuredImmersedEllipseProblem()
  boundary_segment_pt[2] = new TriangleMeshPolyLine(bound_seg,bound_id);
 
  // Fourth boundary segment
- bound_seg[0][0]=half_length;
+ bound_seg[0][0]=2.0*half_length;
  bound_seg[0][1]=-half_height;
- bound_seg[1][0]=-half_length;
+ bound_seg[1][0]=0.0;
  bound_seg[1][1]=-half_height;
 
  // Specify 4th boundary id
