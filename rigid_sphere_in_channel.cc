@@ -58,7 +58,7 @@ using namespace oomph;
  namespace Problem_Parameter
  {    
   /// Reynolds number
-  double Re=0.01;
+  double Re=0.0;
 
   /// Strouhal number
   double St = 1.0;
@@ -76,11 +76,22 @@ using namespace oomph;
   /// Pseudo-solid (mesh) Poisson ratio
   double Nu=0.3;
 
+  // Switch to print additional info
+  // 0 - false, 1- true
+   unsigned printDebugInfo = 0;
+  // Switch to build either the rectangular channel or the haly-cylinder device
+  unsigned RectChannel = 1;
+
   /// Channel length
   double ChannelLength = 16.0;
-
   /// Channel width
   double ChannelWidth = 4.0; 
+
+   //Half-Cylinder
+   /// The width and heigh of the diffuser expansing at 45 degrees
+   double DiffuserSize = 6.75;
+   /// Straight length after the diffuser
+   double DiffuserFinalLength = 4.0;
 
    /// Start position of the particle
    double particle_start_x = ChannelWidth;
@@ -238,6 +249,12 @@ public:
  /// computation of drag vector
  void complete_problem_setup();
 
+ /// Create the boundaries for a rectangular channel 
+ TriangleMeshPolygon* construct_channel_boundaries();
+
+ /// Create the boundaries for a Half-Cylinder device 
+ TriangleMeshPolygon* construct_half_cylinder_boundaries();
+
  ///Set the boundary velocity
  void set_boundary_velocity();
 
@@ -340,9 +357,211 @@ UnstructuredImmersedEllipseProblem()
  // Allocate a timestepper for the rigid body
  this->add_time_stepper_pt(new NewmarkBDF<2>);
 
- // Define the boundaries: Polyline with 4 different
+ // Define the boundaries: Polyline with 
  // boundaries for the outer boundary and 1 internal elliptical hole
+
+ if(Problem_Parameter::RectChannel)
+   {
+     Outer_boundary_polygon_pt = construct_channel_boundaries();
+   }
+ else
+   {
+     if(Problem_Parameter::printDebugInfo)
+       {
+	 std::cout << "Starting construct_half_cylinder_boundaries()" << std::endl;
+       }
+     Outer_boundary_polygon_pt = construct_half_cylinder_boundaries();
+   }
+
+ // Now build the moving rigid body
+ //-------------------------------------
+
+ // We have one rigid body
+ Rigid_body_pt.resize(1);
+ Vector<TriangleMeshClosedCurve*> hole_pt(1);
+
+ // Build Rigid Body
+ //-----------------
+ double x_center = Problem_Parameter::particle_start_x;
+ double y_center = Problem_Parameter::particle_start_y;
+ double A = Problem_Parameter::A;
+ double B = Problem_Parameter::B;
+ GeomObject* temp_hole_pt = new GeneralEllipse(x_center,y_center,A,B);
+ Rigid_body_pt[0] = new ImmersedRigidBodyElement(temp_hole_pt,
+                                                 this->time_stepper_pt(1));
+
+ if(Problem_Parameter::printDebugInfo)
+   {
+     std::cout << "Created ImmersedRigidBodyElement" << std::endl;
+   }
+
+ // Build the two parts of the curvilinear boundary from the rigid body
+ Vector<TriangleMeshCurveSection*> curvilinear_boundary_pt(2);
+
+ //First section (boundary 4)
+ double zeta_start=0.0;
+ double zeta_end=MathematicalConstants::Pi;
+ unsigned nsegment=8; 
+ unsigned boundary_id=4; 
+ curvilinear_boundary_pt[0]=new TriangleMeshCurviLine(
+  Rigid_body_pt[0],zeta_start,zeta_end,nsegment,boundary_id);
+
+ //Second section (boundary 5)
+ zeta_start=MathematicalConstants::Pi;
+ zeta_end=2.0*MathematicalConstants::Pi;
+ nsegment=8; 
+ boundary_id=5; 
+ curvilinear_boundary_pt[1]=new TriangleMeshCurviLine(
+  Rigid_body_pt[0],zeta_start,zeta_end, 
+  nsegment,boundary_id);
+  
+ // Combine to form a hole in the fluid mesh
+ Vector<double> hole_coords(2);
+ hole_coords[0]= x_center;
+ hole_coords[1]= y_center;
+ Vector<TriangleMeshClosedCurve*> curvilinear_hole_pt(1);
+ hole_pt[0]=
+  new TriangleMeshClosedCurve(
+   curvilinear_boundary_pt,hole_coords);
+
+ if(Problem_Parameter::printDebugInfo)
+   {
+     std::cout << "Created rigid body TriangleMeshClosedCurve" << std::endl;
+   }
  
+ // Now build the mesh, based on the boundaries specified by
+ //---------------------------------------------------------
+ // polygons just created
+ //----------------------
+
+ TriangleMeshClosedCurve* closed_curve_pt=Outer_boundary_polygon_pt;
+
+ double uniform_element_area=5.0;
+
+ // Use the TriangleMeshParameters object for gathering all
+ // the necessary arguments for the TriangleMesh object
+ TriangleMeshParameters triangle_mesh_parameters(
+   closed_curve_pt);
+
+ // Define the holes on the domain
+ triangle_mesh_parameters.internal_closed_curve_pt() =
+   hole_pt;
+
+ // Define the maximum element area
+ triangle_mesh_parameters.element_area() =
+   uniform_element_area;
+
+ if(Problem_Parameter::printDebugInfo)
+   {
+     std::cout << "Starting to created the RefinableSolidTriangleMesh" << std::endl;
+   }
+
+
+ // Create the mesh
+ Fluid_mesh_pt =
+   new RefineableSolidTriangleMesh<ELEMENT>(
+     triangle_mesh_parameters, this->time_stepper_pt());
+
+ if(Problem_Parameter::printDebugInfo)
+   {
+     std::cout << "Created the RefinableSolidTriangleMesh" << std::endl;
+   }
+
+ // Set error estimator for bulk mesh
+ Z2ErrorEstimator* error_estimator_pt=new Z2ErrorEstimator;
+ Fluid_mesh_pt->spatial_error_estimator_pt()=error_estimator_pt;
+
+ // Set targets for spatial adaptivity
+ Fluid_mesh_pt->max_permitted_error()=0.005;
+ Fluid_mesh_pt->min_permitted_error()=0.001; 
+ Fluid_mesh_pt->max_element_size()=0.01;
+ Fluid_mesh_pt->min_element_size()=0.001; 
+
+ // Use coarser mesh during validation
+ if (CommandLineArgs::command_line_flag_has_been_set("--validation"))
+  {
+   Fluid_mesh_pt->min_element_size()=0.01; 
+  }
+
+ if(Problem_Parameter::printDebugInfo)
+   {
+     std::cout << "Starting complete_problem_setup()" << std::endl;
+   }
+
+ // Set boundary condition, assign auxiliary node update fct,
+ // complete the build of all elements, attach power elements that allow
+ // computation of drag vector
+ complete_problem_setup();
+
+ if(Problem_Parameter::printDebugInfo)
+   {
+     std::cout << "Finished complete_problem_setup()" << std::endl;
+   }
+
+  
+ //Set the parameters of the rigid body elements
+ ImmersedRigidBodyElement* rigid_element1_pt = 
+  dynamic_cast<ImmersedRigidBodyElement*>(Rigid_body_pt[0]);
+ rigid_element1_pt->initial_centre_of_mass(0) = x_center;
+ rigid_element1_pt->initial_centre_of_mass(1) = y_center; 
+ rigid_element1_pt->mass_shape() = MathematicalConstants::Pi*A*B;
+ rigid_element1_pt->moment_of_inertia_shape() = 
+ 0.25*MathematicalConstants::Pi*A*B*(A*A + B*B);
+ rigid_element1_pt->re_pt() = &Problem_Parameter::Re;
+ rigid_element1_pt->st_pt() = &Problem_Parameter::St;
+ rigid_element1_pt->density_ratio_pt() = &Problem_Parameter::Density_ratio;
+
+ //Pin the position of the centre of mass
+ rigid_element1_pt->pin_centre_of_mass_coordinate(0);
+ rigid_element1_pt->pin_centre_of_mass_coordinate(1);
+
+  // Create the mesh for the rigid bodies
+ Rigid_body_mesh_pt = new Mesh;
+ Rigid_body_mesh_pt->add_element_pt(rigid_element1_pt);
+
+ // Create the drag mesh for the rigid bodies
+ Drag_mesh_pt.resize(1);
+ for(unsigned m=0;m<1;m++) {Drag_mesh_pt[m] = new Mesh;}
+ this->create_drag_elements();
+
+ //Add the drag mesh to the appropriate rigid bodies
+ rigid_element1_pt->set_drag_mesh(Drag_mesh_pt[0]);
+
+
+
+ // Create Lagrange multiplier mesh for boundary motion
+ //----------------------------------------------------
+ // Construct the mesh of elements that enforce prescribed boundary motion
+ // of pseudo-solid fluid mesh by Lagrange multipliers
+ Lagrange_multiplier_mesh_pt=new SolidMesh;
+ create_lagrange_multiplier_elements();
+
+
+ // Combine meshes
+ //---------------
+ 
+ // Add Fluid_mesh_pt sub meshes
+ this->add_sub_mesh(Fluid_mesh_pt);
+
+ // Add Lagrange_multiplier sub meshes
+ this->add_sub_mesh(this->Lagrange_multiplier_mesh_pt);
+
+ this->add_sub_mesh(this->Rigid_body_mesh_pt);
+ 
+ // Build global mesh
+ this->build_global_mesh();
+    
+ // Setup equation numbering scheme
+ cout <<"Number of equations: " << this->assign_eqn_numbers() << std::endl;
+ 
+} // end_of_constructor
+
+//========================================================================
+/// Create the walls of the domain: a rectangular channel
+//========================================================================
+template<class ELEMENT>
+TriangleMeshPolygon* UnstructuredImmersedEllipseProblem<ELEMENT>::construct_channel_boundaries()
+{
  // Build the boundary segments for outer boundary, consisting of
  //--------------------------------------------------------------
  // four separate polyline segments
@@ -412,157 +631,141 @@ UnstructuredImmersedEllipseProblem()
  // Create the triangle mesh polygon for outer boundary using boundary segment
  Outer_boundary_polygon_pt = new TriangleMeshPolygon(boundary_segment_pt);
 
- // Now build the moving rigid body
- //-------------------------------------
+ return Outer_boundary_polygon_pt;
+}
 
- // We have one rigid body
- Rigid_body_pt.resize(1);
- Vector<TriangleMeshClosedCurve*> hole_pt(1);
 
- // Build Rigid Body
- //-----------------
- double x_center = Problem_Parameter::particle_start_x;
- double y_center = Problem_Parameter::particle_start_y;
- double A = Problem_Parameter::A;
- double B = Problem_Parameter::B;
- GeomObject* temp_hole_pt = new GeneralEllipse(x_center,y_center,A,B);
- Rigid_body_pt[0] = new ImmersedRigidBodyElement(temp_hole_pt,
-                                                 this->time_stepper_pt(1));
+//========================================================================
+/// Create the walls of the domain: a half-cylinder device
+//========================================================================
+template<class ELEMENT>
+TriangleMeshPolygon* UnstructuredImmersedEllipseProblem<ELEMENT>::construct_half_cylinder_boundaries()
+{
+ // Build the boundary segments for outer boundary, consisting of
+ //--------------------------------------------------------------
+ // four separate polyline segments
+ //---------------------------------
+ Vector<TriangleMeshCurveSection*> boundary_segment_pt(8);
 
- // Build the two parts of the curvilinear boundary from the rigid body
- Vector<TriangleMeshCurveSection*> curvilinear_boundary_pt(2);
+ //Set the length of the channel
+ double half_length = Problem_Parameter::ChannelLength/2.0;
+ double half_height = Problem_Parameter::ChannelWidth/2.0;
+ 
+ // Initialize boundary segment
+ Vector<Vector<double> > bound_seg(2);
+ for(unsigned i=0;i<2;i++) {bound_seg[i].resize(2);}
 
- //First section (boundary 4)
- double zeta_start=0.0;
- double zeta_end=MathematicalConstants::Pi;
- unsigned nsegment=8; 
- unsigned boundary_id=4; 
- curvilinear_boundary_pt[0]=new TriangleMeshCurviLine(
-  Rigid_body_pt[0],zeta_start,zeta_end,nsegment,boundary_id);
+ // First boundary segment
+ /*bound_seg[0][0]=-half_length;
+ bound_seg[0][1]=-half_height;
+ bound_seg[1][0]=-half_length;
+ bound_seg[1][1]=half_height;*/
+ bound_seg[0][0]=0.0;
+ bound_seg[0][1]=-half_height;
+ bound_seg[1][0]=0.0;
+ bound_seg[1][1]=half_height;
+ 
+ // Specify 1st boundary id
+ unsigned bound_id = 0;
 
- //Second section (boundary 5)
- zeta_start=MathematicalConstants::Pi;
- zeta_end=2.0*MathematicalConstants::Pi;
- nsegment=8; 
- boundary_id=5; 
- curvilinear_boundary_pt[1]=new TriangleMeshCurviLine(
-  Rigid_body_pt[0],zeta_start,zeta_end, 
-  nsegment,boundary_id);
+ // Build the 1st boundary segment
+ boundary_segment_pt[0] = new TriangleMeshPolyLine(bound_seg,bound_id);
+ 
+ // Second boundary segment
+ bound_seg[0][0]=0.0;
+ bound_seg[0][1]=half_height;
+ bound_seg[1][0]=2.0*half_length;
+ bound_seg[1][1]=half_height;
+
+ // Specify 2nd boundary id
+ bound_id = 1;
+
+ // Build the 2nd boundary segment
+ boundary_segment_pt[1] = new TriangleMeshPolyLine(bound_seg,bound_id);
+
+ // Third boundary segment - Diffuser side
+ bound_seg[0][0]=2.0*half_length;
+ bound_seg[0][1]=half_height;
+ bound_seg[1][0]=2.0*half_length + Problem_Parameter::DiffuserSize;
+ bound_seg[1][1]=half_height + Problem_Parameter::DiffuserSize;
+
+ // Specify 3rd boundary id
+ bound_id = 1;
+
+ // Build the 3rd boundary segment
+ boundary_segment_pt[2] = new TriangleMeshPolyLine(bound_seg,bound_id);
+
+ // fourth boundary segment
+ bound_seg[0][0]=2.0*half_length + Problem_Parameter::DiffuserSize;
+ bound_seg[0][1]=half_height + Problem_Parameter::DiffuserSize;
+ bound_seg[1][0]=2.0*half_length + Problem_Parameter::DiffuserSize + Problem_Parameter::DiffuserFinalLength;
+ bound_seg[1][1]=half_height + Problem_Parameter::DiffuserSize;
+
+ // Specify 4th boundary id
+ bound_id = 1;
+
+ // Build the 8th boundary segment
+ boundary_segment_pt[3] = new TriangleMeshPolyLine(bound_seg,bound_id);
+
+ // Fifth boundary segment
+ bound_seg[0][0]=2.0*half_length + Problem_Parameter::DiffuserSize + Problem_Parameter::DiffuserFinalLength;
+ bound_seg[0][1]=half_height + Problem_Parameter::DiffuserSize;
+ bound_seg[1][0]=2.0*half_length + Problem_Parameter::DiffuserSize + Problem_Parameter::DiffuserFinalLength;
+ bound_seg[1][1]=-half_height - Problem_Parameter::DiffuserSize;
+
+ // Specify 5th boundary id
+ bound_id = 2;
+
+ // Build the 5th boundary segment
+ boundary_segment_pt[4] = new TriangleMeshPolyLine(bound_seg,bound_id);
+
+ // Sixth boundary segment
+ bound_seg[0][0]=2.0*half_length + Problem_Parameter::DiffuserSize + Problem_Parameter::DiffuserFinalLength;
+ bound_seg[0][1]=-half_height - Problem_Parameter::DiffuserSize;
+ bound_seg[1][0]=2.0*half_length + Problem_Parameter::DiffuserSize;
+ bound_seg[1][1]=-half_height - Problem_Parameter::DiffuserSize;
+
+ // Specify 6th boundary id
+ bound_id = 3;
+
+ // Build the 6th boundary segment
+ boundary_segment_pt[5] = new TriangleMeshPolyLine(bound_seg,bound_id);
+
+ // Seventh boundary segment
+ bound_seg[0][0]=2.0*half_length + Problem_Parameter::DiffuserSize;
+ bound_seg[0][1]=-half_height - Problem_Parameter::DiffuserSize;
+ bound_seg[1][0]=2.0*half_length;
+ bound_seg[1][1]=-half_height;
+
+ // Specify 7th boundary id
+ bound_id = 3;
+
+ // Build the 7th boundary segment
+ boundary_segment_pt[6] = new TriangleMeshPolyLine(bound_seg,bound_id);
+
+
+ // Eigth boundary segment
+ bound_seg[0][0]=2.0*half_length;
+ bound_seg[0][1]=-half_height;
+ bound_seg[1][0]=0.0;
+ bound_seg[1][1]=-half_height;
+
+ // Specify 8th boundary id
+ bound_id = 3;
+
+ // Build the 8th boundary segment
+ boundary_segment_pt[7] = new TriangleMeshPolyLine(bound_seg,bound_id);
   
- // Combine to form a hole in the fluid mesh
- Vector<double> hole_coords(2);
- hole_coords[0]= x_center;
- hole_coords[1]= y_center;
- Vector<TriangleMeshClosedCurve*> curvilinear_hole_pt(1);
- hole_pt[0]=
-  new TriangleMeshClosedCurve(
-   curvilinear_boundary_pt,hole_coords);
- 
- // Now build the mesh, based on the boundaries specified by
- //---------------------------------------------------------
- // polygons just created
- //----------------------
+ // Create the triangle mesh polygon for outer boundary using boundary segment
+ Outer_boundary_polygon_pt = new TriangleMeshPolygon(boundary_segment_pt);
 
- TriangleMeshClosedCurve* closed_curve_pt=Outer_boundary_polygon_pt;
-
- double uniform_element_area=1.0;
-
- // Use the TriangleMeshParameters object for gathering all
- // the necessary arguments for the TriangleMesh object
- TriangleMeshParameters triangle_mesh_parameters(
-   closed_curve_pt);
-
- // Define the holes on the domain
- triangle_mesh_parameters.internal_closed_curve_pt() =
-   hole_pt;
-
- // Define the maximum element area
- triangle_mesh_parameters.element_area() =
-   uniform_element_area;
-
- // Create the mesh
- Fluid_mesh_pt =
-   new RefineableSolidTriangleMesh<ELEMENT>(
-     triangle_mesh_parameters, this->time_stepper_pt());
-
- // Set error estimator for bulk mesh
- Z2ErrorEstimator* error_estimator_pt=new Z2ErrorEstimator;
- Fluid_mesh_pt->spatial_error_estimator_pt()=error_estimator_pt;
-
- // Set targets for spatial adaptivity
- Fluid_mesh_pt->max_permitted_error()=0.005;
- Fluid_mesh_pt->min_permitted_error()=0.001; 
- Fluid_mesh_pt->max_element_size()=1.0;
- Fluid_mesh_pt->min_element_size()=0.001; 
-
- // Use coarser mesh during validation
- if (CommandLineArgs::command_line_flag_has_been_set("--validation"))
-  {
-   Fluid_mesh_pt->min_element_size()=0.01; 
-  }
-
- // Set boundary condition, assign auxiliary node update fct,
- // complete the build of all elements, attach power elements that allow
- // computation of drag vector
- complete_problem_setup();
-  
- //Set the parameters of the rigid body elements
- ImmersedRigidBodyElement* rigid_element1_pt = 
-  dynamic_cast<ImmersedRigidBodyElement*>(Rigid_body_pt[0]);
- rigid_element1_pt->initial_centre_of_mass(0) = x_center;
- rigid_element1_pt->initial_centre_of_mass(1) = y_center; 
- rigid_element1_pt->mass_shape() = MathematicalConstants::Pi*A*B;
- rigid_element1_pt->moment_of_inertia_shape() = 
- 0.25*MathematicalConstants::Pi*A*B*(A*A + B*B);
- rigid_element1_pt->re_pt() = &Problem_Parameter::Re;
- rigid_element1_pt->st_pt() = &Problem_Parameter::St;
- rigid_element1_pt->density_ratio_pt() = &Problem_Parameter::Density_ratio;
-
- //Pin the position of the centre of mass
- rigid_element1_pt->pin_centre_of_mass_coordinate(0);
- rigid_element1_pt->pin_centre_of_mass_coordinate(1);
-
-  // Create the mesh for the rigid bodies
- Rigid_body_mesh_pt = new Mesh;
- Rigid_body_mesh_pt->add_element_pt(rigid_element1_pt);
-
- // Create the drag mesh for the rigid bodies
- Drag_mesh_pt.resize(1);
- for(unsigned m=0;m<1;m++) {Drag_mesh_pt[m] = new Mesh;}
- this->create_drag_elements();
-
- //Add the drag mesh to the appropriate rigid bodies
- rigid_element1_pt->set_drag_mesh(Drag_mesh_pt[0]);
-
-
-
- // Create Lagrange multiplier mesh for boundary motion
- //----------------------------------------------------
- // Construct the mesh of elements that enforce prescribed boundary motion
- // of pseudo-solid fluid mesh by Lagrange multipliers
- Lagrange_multiplier_mesh_pt=new SolidMesh;
- create_lagrange_multiplier_elements();
-
-
- // Combine meshes
- //---------------
- 
- // Add Fluid_mesh_pt sub meshes
- this->add_sub_mesh(Fluid_mesh_pt);
-
- // Add Lagrange_multiplier sub meshes
- this->add_sub_mesh(this->Lagrange_multiplier_mesh_pt);
-
- this->add_sub_mesh(this->Rigid_body_mesh_pt);
- 
- // Build global mesh
- this->build_global_mesh();
-    
- // Setup equation numbering scheme
- cout <<"Number of equations: " << this->assign_eqn_numbers() << std::endl;
- 
-} // end_of_constructor
-
+     if(Problem_Parameter::printDebugInfo)
+       {
+	 std::cout << "In construct_half_cylinder_boundaries(), " 
+		   << "created TriangleMeshPolygon. "<< std::endl;
+       }
+ return Outer_boundary_polygon_pt;
+}
 
 //========================================================================
 /// Destructor that cleans up memory and closes files
@@ -1227,6 +1430,14 @@ int main(int argc, char **argv)
  // Validation?
  CommandLineArgs::specify_command_line_flag("--validation");
 
+ // Use rectangular geometry or half-cylinder geometry? Bool
+ // True leads to rectangular geometry
+ CommandLineArgs::specify_command_line_flag("--rect",
+                                            &Problem_Parameter::RectChannel);
+
+ CommandLineArgs::specify_command_line_flag("--printDebugInfo",
+                                            &Problem_Parameter::printDebugInfo);
+
  // Parse command line
  CommandLineArgs::parse_and_assign(); 
  
@@ -1287,3 +1498,4 @@ int main(int argc, char **argv)
  std::cout << "\n\n Program finished.\n ======================================= \n" << std::endl;
 
 } //end of main
+ 
